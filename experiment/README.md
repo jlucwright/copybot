@@ -42,6 +42,15 @@ baseline, it immediately samples the public CLOB book.
 Requests run concurrently so wallet position in the roster does not create a
 serial detection penalty.
 
+## Pending-transaction observer
+
+`copybot-mempool-observer` subscribes to full Polygon pending transactions over
+WebSocket and decodes watched-wallet matches into a separate append-only file.
+It imports feed and calldata modules only: there is no signer, custody, CLOB
+authentication or order path. The retained service uses one PublicNode socket
+and writes `/var/lib/copybot-paper/mempool-observations.jsonl`. This is a
+detection lane, not fill or profitability evidence.
+
 Each paper quote:
 
 - walks displayed asks only up to the frozen 0.15-cent price limit relative to

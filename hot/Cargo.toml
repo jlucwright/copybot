@@ -34,3 +34,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "copybot-hot"
 path = "src/main.rs"
+
+[[bin]]
+name = "copybot-mempool-observer"
+path = "src/mempool_observer.rs"
