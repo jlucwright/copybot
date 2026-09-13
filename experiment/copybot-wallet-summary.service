@@ -1,0 +1,23 @@
+[Unit]
+Description=Read-only paper wallet dashboard summary
+After=network-online.target copybot-wallet-paper.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=copybot-paper
+Group=copybot-paper
+WorkingDirectory=/opt/copybot-paper
+ExecStart=/usr/bin/python3 /opt/copybot-paper/serve_summary.py --host 0.0.0.0 --port 8091 --observations /var/lib/copybot-paper/observations.jsonl
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/copybot-paper
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target
