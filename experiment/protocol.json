@@ -1,0 +1,22 @@
+{
+  "schema": "copybot.wallet-candidate-protocol.v1",
+  "leaderboard_categories": [
+    "CRYPTO",
+    "SPORTS",
+    "POLITICS",
+    "ECONOMICS",
+    "FINANCE"
+  ],
+  "leaderboard_period": "WEEK",
+  "leaderboard_order": "PNL",
+  "leaderboard_limit_per_category": 5,
+  "activity_sample_limit": 100,
+  "paper_sizing": {
+    "pct": 0.005,
+    "max_usd_per_fill": 2.0,
+    "min_order_usd": 1.0,
+    "min_fill_floor": true,
+    "buy_slippage_c": 0.15
+  },
+  "selection_rule": "Observe the union of every returned leaderboard row; apply no performance threshold or post-observation filtering."
+}

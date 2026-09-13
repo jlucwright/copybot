@@ -1,6 +1,18 @@
 import unittest
 
-from observe_wallets import buy_quote, lane_accepts, requested_cash, taker_fee, trade_key
+from observe_wallets import (
+    buy_quote,
+    lane_accepts,
+    load_state,
+    requested_cash,
+    roster_specs,
+    state_baselined_wallets,
+    taker_fee,
+    trade_key,
+)
+from pathlib import Path
+import json
+import tempfile
 
 
 class ObserverTests(unittest.TestCase):
@@ -17,11 +29,25 @@ class ObserverTests(unittest.TestCase):
         self.assertEqual(quote["levels"], 2)
         self.assertLessEqual(quote["total_usd"], 1.000001)
         self.assertGreater(quote["fee_usd"], 0)
+        self.assertTrue(quote["executable"])
 
     def test_unfilled_quote_is_explicit(self):
         quote = buy_quote([{"price": "0.50", "size": "0.5"}], 1.0, 0.07)
         self.assertFalse(quote["filled"])
         self.assertGreater(quote["unspent_usd"], 0.7)
+        self.assertFalse(quote["executable"])
+
+    def test_quote_enforces_slippage_and_market_minimum(self):
+        quote = buy_quote(
+            [{"price": "0.50", "size": "4"}, {"price": "0.51", "size": "10"}],
+            2.0,
+            0.0,
+            min_order_size=5,
+            max_price=0.50,
+        )
+        self.assertTrue(quote["filled"])
+        self.assertFalse(quote["meets_min_order_size"])
+        self.assertFalse(quote["executable"])
 
     def test_minimum_floor_and_maximum_cap(self):
         lane = {"pct": 0.005, "max_usd": 2.0, "min_usd": 1.0, "min_fill_floor": True}
@@ -38,6 +64,39 @@ class ObserverTests(unittest.TestCase):
         lane = {"title_contains": "Ethereum Up or Down"}
         self.assertTrue(lane_accepts({"title": "Ethereum Up or Down - 1PM"}, lane))
         self.assertFalse(lane_accepts({"title": "Bitcoin Up or Down - 1PM"}, lane))
+
+    def test_roster_requires_explicit_paper_sizing(self):
+        value = {
+            "schema": "copybot.wallet-observer-roster.v1",
+            "lanes": [{
+                "name": "candidate_12345678",
+                "wallet": "0x" + "1" * 40,
+                "pct": 0.005,
+                "max_usd_per_fill": 2,
+                "min_order_usd": 1,
+                "min_fill_floor": True,
+                "buy_slippage_c": 0.15,
+                "leaderboard_categories": ["CRYPTO"],
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "roster.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertEqual(roster_specs(path)[0]["leaderboard_categories"], ["CRYPTO"])
+
+    def test_version_two_state_requires_per_wallet_baselines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            path.write_text(json.dumps({"version": 2, "seen": []}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_state(path)
+
+    def test_version_one_state_is_rebaselined_fail_closed(self):
+        self.assertEqual(state_baselined_wallets({"version": 1, "seen": ["old"]}), set())
+        self.assertEqual(
+            state_baselined_wallets({"version": 2, "seen": [], "baselined_wallets": ["0x1"]}),
+            {"0x1"},
+        )
 
 
 if __name__ == "__main__":

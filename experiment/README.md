@@ -1,71 +1,124 @@
 # Paper wallet-copy experiment
 
-Evidence cut: 2026-09-13, public Polymarket activity and user-P&L APIs.
+The experiment's Python entry points are order-incapable. They neither import
+nor accept credentials, and they make public GET requests only. The ignored
+local Rust config remains `dry`, uses zero addresses and has every lane
+disabled. It is not an input to the documented roster path. Do not treat a
+successful process start as evidence that a copy strategy works.
 
-This is a separate local checkout of the upstream copybot. It is an experiment,
-not a production bot. The only enabled lanes in the local dry-run config are:
+## Candidate protocol
 
-| Lane | Address | Reason | Current state |
-| --- | --- | --- | --- |
-| `l5zn_btc15` | `0xb945945d5bcaf7b56834d4da8cdf8f8f94b2db68` | Large current sample, +$1,090.21 user-P&L over the latest day, but maker execution remains unproven. | Enabled, dry only |
-| `ce25_eth15` | `0xce25e214d5cfe4f459cf67f08df581885aae7fdc` | Current activity and long-run positive reconstruction, with substantial two-sided/pair behaviour. | Enabled, dry only |
-| `maker_b27bc9` | `0xb27bc932bf8110d8f78e55da7d5f0497a18b5b82` | Active SOL/XRP maker population, but the paper cell is still small and maker registration is not queue proof. | Disabled |
+[`protocol.json`](protocol.json) freezes the discovery rule before forward
+observations are evaluated:
 
-The local config uses zero addresses, absolute paper caps, no feed, and no
-private key. It must not be changed to `shadow` or `live` as part of this
-experiment. A feed and measured lane statistics are required before any
-future replay can be considered, and the public activity feed cannot prove
-that a follower receives the leader's maker fill.
+- take the top five weekly P&L rows from the crypto, sports, politics,
+  economics and finance leaderboards;
+- observe the union of every returned wallet, including overlapping and
+  inactive-looking rows;
+- apply no P&L, volume, activity or execution threshold after seeing results;
+- label observed trades by their actual event tags, separately from the
+  leaderboard categories that supplied the wallet.
 
-Fee policy is deliberately conservative: paper scoring charges the full
-market taker fee and never borrows a leader's rebate tier. Polymarket applies
-fees at match time, and any taker rebate belongs to the executing follower's
-own tier. For the observed crypto markets the current fee detail is `r=0.07`,
-so a two-share $0.50 fill would carry a $0.035 fee before any independently
-verified follower rebate. Makers are fee-free, but the disabled maker lane has
-not earned a registration or queue-proof exception.
+The 2026-09-13 19:26 UTC refresh produced 22 unique candidates. The former
+manual starting wallets are not selected by this frozen rule. L5ZN was crypto
+rank 787 with $832.58 weekly leaderboard P&L, CE25 was rank 87 with $9,515.22,
+and `0xb27…b5b82` was rank 30 with $20,049.14. These leaderboard figures are
+discovery inputs, not reconstructed or follower P&L.
 
-Not selected: Bonereaper (historical reconstruction gap and two-sided flow),
-DoggyStyIe (public-feed follower timing was falsified), WQEWQA, Goingdown and
-9F5 (directional or negative current evidence), pbot6 (recent spike without
-the required longer-run validation), a689 and `me` (insufficient sample), and
-polmaxi (no activity in the latest day despite a populated profile).
-
-Non-crypto leaderboard wallets remain discovery-only. A one-day check found
-that a high weekly leaderboard number can be stale or extremely concentrated
-(for example, the sampled sports leader had two trades), so none is wired into
-the copy lanes yet.
-
-Run the parser/build check from the repository root:
+Refresh the ignored evidence snapshot and observer roster:
 
 ```sh
+python3 experiment/refresh_candidates.py \
+  --snapshot experiment/data/candidate-snapshot.json \
+  --roster experiment/data/candidate-roster.json
+```
+
+## Forward observer
+
+[`observe_wallets.py`](observe_wallets.py) polls the public activity API. Its
+first poll establishes a no-backfill baseline. For each BUY first visible on a
+later poll, it waits 250 ms from detection and then samples the public CLOB
+book. Activity requests run concurrently so wallet position in the roster does
+not create a serial detection penalty.
+
+Each paper quote:
+
+- walks displayed asks only up to the frozen 0.15-cent price limit relative to
+  the leader price;
+- includes fee parameters read from that market at sample time;
+- assumes no wallet-specific rebate or fee advantage;
+- checks the market's minimum order size as well as displayed depth;
+- records leaderboard membership and the actual market categories returned by
+  the event API.
+
+SELL signals are retained but not scored because the experiment does not yet
+have follower inventory. Public activity timestamps have one-second precision,
+and visibility occurs after the leader match. A sampled book is not a fill.
+
+Establish a baseline:
+
+```sh
+python3 experiment/observe_wallets.py \
+  --roster experiment/data/candidate-roster.json \
+  --state experiment/run/candidate-observer-state.json \
+  --output experiment/data/candidate-observations.jsonl \
+  --max-polls 1
+```
+
+Then collect a bounded forward sample:
+
+```sh
+python3 experiment/observe_wallets.py \
+  --roster experiment/data/candidate-roster.json \
+  --state experiment/run/candidate-observer-state.json \
+  --output experiment/data/candidate-observations.jsonl \
+  --max-polls 18 --poll-seconds 5 --delay-ms 250
+```
+
+Summarise the append-only observations:
+
+```sh
+python3 experiment/evaluate_observations.py \
+  --input experiment/data/candidate-observations.jsonl \
+  --output experiment/data/candidate-summary.json
+```
+
+The clean bounded verification run on 2026-09-13 captured 50 BUY and nine SELL
+signals without an API error. Three BUYs were executable under both the price
+cap and minimum-size rule. Public detection lag ranged from 2,398 ms to 42,267
+ms (median 21,267 ms). Actual book sampling occurred 337 to 1,739 ms after
+detection (median 522 ms). Encountered market fee rates were 0, 0.04, 0.05 and
+0.07. This sample proves the collection and quote path, not profitability.
+
+## Resource and hosting decision
+
+Measured locally with `/usr/bin/time -l`:
+
+| Operation | Wall time | Maximum RSS |
+| --- | ---: | ---: |
+| Refresh 22 candidates | 0.59 s | 49 MB |
+| Baseline 22 wallets | 0.38 s | 64 MB |
+| 12 polls at 5 s, including 59 signals | 82.23 s | 80 MB |
+
+The retained evidence was 101 KB for this run. Allowing for Python, OS services,
+log rotation and bursts, one dedicated `t4g.small` in AWS `eu-central-2`
+(Zurich), with 2 vCPU, 2 GiB RAM and an 8 GiB gp3 root volume, is sufficient.
+Use a separate instance and service account. Do not place this process on the
+existing overloaded Zurich research host.
+
+No infrastructure has been created or changed. The remaining hosting choice is
+whether to approve that dedicated `t4g.small`. Until then, keep the experiment
+local and bounded. Confirm the account's current on-demand price or free-trial
+eligibility before provisioning.
+
+## Verification
+
+```sh
+python3 -m unittest discover -s experiment -p 'test_*.py'
 cargo test --locked --manifest-path hot/Cargo.toml --lib --bin copybot-hot
 cargo build --locked --release --manifest-path hot/Cargo.toml --bin copybot-hot
 ```
 
-## Public paper observer
-
-The Rust transaction feed is not used for this experiment because leader fills
-are matched off-chain before settlement. `observe_wallets.py` polls the official
-public activity endpoint, suppresses everything present at its first baseline,
-and samples the public CLOB book only for trades first observed afterwards.
-It neither imports nor accepts a private key.
-
-Run a single baseline poll:
-
-```sh
-python3 experiment/observe_wallets.py \
-  --config deploy/copybot2.paper.toml \
-  --state experiment/run/wallet-observer-state.json \
-  --output experiment/data/wallet-observations.jsonl
-```
-
-For a bounded forward sample, add `--max-polls 30 --poll-seconds 10`. The
-observer honours bounded rate-limit retries. Each BUY
-quote walks the book after a 250 ms follower delay, caps total spend at the
-lane's paper limit, and includes the market-specific taker fee. SELL signals
-are retained but not scored because the follower inventory is not yet tracked.
-This evidence tests observability and executable entry prices, not profitability.
-The local config also gives each enabled lane an explicit `title_contains`
-filter, preventing a wallet's trades in another market family from entering the
-wrong cohort.
+Realised or resolved follower outcomes are still absent. Do not define a
+promotion threshold or choose wallets until a pre-declared observation window
+contains enough settled or independently closeable paper positions.
