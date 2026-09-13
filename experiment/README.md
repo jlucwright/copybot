@@ -42,3 +42,30 @@ Run the parser/build check from the repository root:
 cargo test --locked --manifest-path hot/Cargo.toml --lib --bin copybot-hot
 cargo build --locked --release --manifest-path hot/Cargo.toml --bin copybot-hot
 ```
+
+## Public paper observer
+
+The Rust transaction feed is not used for this experiment because leader fills
+are matched off-chain before settlement. `observe_wallets.py` polls the official
+public activity endpoint, suppresses everything present at its first baseline,
+and samples the public CLOB book only for trades first observed afterwards.
+It neither imports nor accepts a private key.
+
+Run a single baseline poll:
+
+```sh
+python3 experiment/observe_wallets.py \
+  --config deploy/copybot2.paper.toml \
+  --state experiment/run/wallet-observer-state.json \
+  --output experiment/data/wallet-observations.jsonl
+```
+
+For a bounded forward sample, add `--max-polls 30 --poll-seconds 10`. The
+observer honours bounded rate-limit retries. Each BUY
+quote walks the book after a 250 ms follower delay, caps total spend at the
+lane's paper limit, and includes the market-specific taker fee. SELL signals
+are retained but not scored because the follower inventory is not yet tracked.
+This evidence tests observability and executable entry prices, not profitability.
+The local config also gives each enabled lane an explicit `title_contains`
+filter, preventing a wallet's trades in another market family from entering the
+wrong cohort.
