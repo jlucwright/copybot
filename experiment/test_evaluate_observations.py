@@ -20,11 +20,24 @@ class EvaluateObservationTests(unittest.TestCase):
                 "fee_usd": 0.01,
                 "vwap": 0.501,
             },
+            "paper_challengers": {
+                "fixed_slippage_c": {"0.5": {
+                    "filled": True, "meets_min_order_size": True, "executable": True,
+                    "fee_usd": 0.01, "vwap": 0.502,
+                }},
+                "venue_minimum": {"quote": None},
+            },
         }
-        result = summarise([row])
+        detections = [
+            {"kind": "feed_detection", "observed_at_ms": 1000, "trade_key": "t", "feed": "trades"},
+            {"kind": "feed_detection", "observed_at_ms": 1250, "trade_key": "t", "feed": "activity"},
+        ]
+        result = summarise(detections + [row])
         self.assertEqual(result["all_quotes"]["depth_filled"], 1)
         self.assertEqual(result["all_quotes"]["executable_quotes"], 0)
         self.assertEqual(result["by_market_category"]["CRYPTO"]["buy_signals"], 1)
+        self.assertEqual(result["challengers"]["slippage_0.5c"]["executable_quotes"], 1)
+        self.assertEqual(result["feed_detection"]["activity_minus_trades_ms"]["median"], 250)
         self.assertIsNone(result["promotion_threshold"])
         self.assertFalse(result["order_capability"])
 

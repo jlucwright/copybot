@@ -5,10 +5,12 @@ from observe_wallets import (
     lane_accepts,
     load_state,
     requested_cash,
+    normalise_v2_trade,
     roster_specs,
     state_baselined_wallets,
     taker_fee,
     trade_key,
+    venue_minimum_cash,
 )
 from pathlib import Path
 import json
@@ -53,6 +55,23 @@ class ObserverTests(unittest.TestCase):
         lane = {"pct": 0.005, "max_usd": 2.0, "min_usd": 1.0, "min_fill_floor": True}
         self.assertEqual(requested_cash({"usdcSize": 4.0}, lane), 1.0)
         self.assertEqual(requested_cash({"usdcSize": 1000.0}, lane), 2.0)
+
+    def test_v2_trade_normalisation_derives_missing_usdc_size(self):
+        row = {
+            "proxy_wallet": "0x1", "transaction_hash": "0x2", "timestamp": 3,
+            "condition_id": "0x4", "token_id": "5", "side": "BUY",
+            "size": 4, "price": 0.25, "event_slug": "event",
+        }
+        trade = normalise_v2_trade(row)
+        self.assertEqual(trade["asset"], "5")
+        self.assertEqual(trade["usdcSize"], 1.0)
+        self.assertEqual(trade["eventSlug"], "event")
+
+    def test_venue_minimum_cash_is_capped_and_depth_aware(self):
+        asks = [{"price": "0.50", "size": "4"}, {"price": "0.60", "size": "4"}]
+        self.assertAlmostEqual(venue_minimum_cash(asks, 5, 0.0, 5.0), 2.6)
+        self.assertIsNone(venue_minimum_cash(asks, 5, 0.0, 2.5))
+        self.assertIsNone(venue_minimum_cash(asks[:1], 5, 0.0, 5.0))
 
     def test_trade_key_is_stable_and_trade_specific(self):
         trade = {"timestamp": 1, "asset": "a", "side": "BUY", "size": 2, "price": 0.5}

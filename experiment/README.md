@@ -35,11 +35,12 @@ python3 experiment/refresh_candidates.py \
 
 ## Forward observer
 
-[`observe_wallets.py`](observe_wallets.py) polls the public activity API. Its
-first poll establishes a no-backfill baseline. For each BUY first visible on a
-later poll, it waits 250 ms from detection and then samples the public CLOB
-book. Activity requests run concurrently so wallet position in the roster does
-not create a serial detection penalty.
+[`observe_wallets.py`](observe_wallets.py) polls the public v2 trades and
+activity feeds once per second. It maintains a separate no-backfill baseline
+for each feed and wallet. For each BUY first visible on either feed after that
+baseline, it waits 250 ms from detection and samples the public CLOB book.
+Requests run concurrently so wallet position in the roster does not create a
+serial detection penalty.
 
 Each paper quote:
 
@@ -50,6 +51,14 @@ Each paper quote:
 - checks the market's minimum order size as well as displayed depth;
 - records leaderboard membership and the actual market categories returned by
   the event API.
+
+The same book snapshot also evaluates two pre-declared paper challengers. The
+first tests fixed price limits of 0.15, 0.5 and 1 cent above the leader price.
+The second raises the paper amount to the market's exact minimum share size,
+but only when the resulting cash requirement is no more than $5. The control
+quote remains unchanged. Feed detections are recorded separately so later
+analysis can compare v2 trades with v2 activity without counting one trade
+twice.
 
 SELL signals are retained but not scored because the experiment does not yet
 have follower inventory. Public activity timestamps have one-second precision,
@@ -100,16 +109,16 @@ Measured locally with `/usr/bin/time -l`:
 | Baseline 22 wallets | 0.38 s | 64 MB |
 | 12 polls at 5 s, including 59 signals | 82.23 s | 80 MB |
 
-The retained evidence was 101 KB for this run. Allowing for Python, OS services,
-log rotation and bursts, one dedicated `t4g.small` in AWS `eu-central-2`
-(Zurich), with 2 vCPU, 2 GiB RAM and an 8 GiB gp3 root volume, is sufficient.
-Use a separate instance and service account. Do not place this process on the
-existing overloaded Zurich research host.
+The retained evidence was 101 KB for this run. The live observer now runs on a
+dedicated `t4g.micro` in AWS `eu-central-2` (Zurich), with 2 vCPU, 1 GiB RAM and
+an encrypted 8 GiB gp3 root volume. The instance is
+`i-04b7b5e56196ff512`. It is separate from the existing Zurich research host.
+The service has no credentials and deploys only the public Python observer.
 
-No infrastructure has been created or changed. The remaining hosting choice is
-whether to approve that dedicated `t4g.small`. Until then, keep the experiment
-local and bounded. Confirm the account's current on-demand price or free-trial
-eligibility before provisioning.
+AWS's current on-demand compute price is $0.0106 per hour, about $7.74 for a
+730-hour month. An assigned public IPv4 address adds $0.005 per hour, about
+$3.65 per month. The 8 GiB gp3 volume is additional, so the expected total is
+about $12 to $13 per month before tax and outbound data.
 
 ## Verification
 

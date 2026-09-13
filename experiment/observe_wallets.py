@@ -18,7 +18,6 @@ import os
 from pathlib import Path
 import tempfile
 import time
-import tomllib
 from typing import Any
 from urllib.parse import urlencode
 from urllib.error import HTTPError
@@ -27,7 +26,10 @@ from urllib.request import Request, urlopen
 
 DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
-USER_AGENT = "copybot-paper-observer/1"
+USER_AGENT = "copybot-paper-observer/2"
+FEEDS = ("trades", "activity")
+SLIPPAGE_LEVELS_C = (0.15, 0.5, 1.0)
+VENUE_MINIMUM_CAP_USD = 5.0
 
 
 def fetch_json(url: str, *, timeout: float = 10.0, attempts: int = 4) -> Any:
@@ -61,6 +63,27 @@ def trade_key(trade: dict[str, Any]) -> str:
         trade.get("price"),
     )
     return hashlib.sha256(json.dumps(fields, separators=(",", ":")).encode()).hexdigest()
+
+
+def normalise_v2_trade(row: dict[str, Any]) -> dict[str, Any]:
+    """Convert either public v2 feed to the observer's stable internal shape."""
+    size = float(row.get("size") or 0.0)
+    price = float(row.get("price") or 0.0)
+    return {
+        "proxyWallet": row.get("proxy_wallet"),
+        "transactionHash": row.get("transaction_hash"),
+        "timestamp": row.get("timestamp"),
+        "conditionId": row.get("condition_id"),
+        "asset": row.get("token_id"),
+        "side": row.get("side"),
+        "size": size,
+        "usdcSize": float(row.get("usdc_size") or size * price),
+        "price": price,
+        "title": row.get("title"),
+        "slug": row.get("slug"),
+        "eventSlug": row.get("event_slug"),
+        "outcome": row.get("outcome"),
+    }
 
 
 def taker_fee(shares: float, price: float, rate: float) -> float:
@@ -123,6 +146,10 @@ def buy_quote(
 
 
 def lane_specs(config_path: Path) -> list[dict[str, Any]]:
+    try:
+        import tomllib
+    except ImportError as error:
+        raise RuntimeError("TOML config input requires Python 3.11 or newer") from error
     with config_path.open("rb") as handle:
         root = tomllib.load(handle)
     if root.get("bot", {}).get("mode") != "dry":
@@ -174,6 +201,11 @@ def roster_specs(roster_path: Path) -> list[dict[str, Any]]:
                 "title_contains": "",
                 "buy_slippage_c": float(lane["buy_slippage_c"]),
                 "leaderboard_categories": list(lane.get("leaderboard_categories") or []),
+                "slippage_levels_c": tuple(float(value) for value in
+                                           lane.get("paper_challengers", {}).get(
+                                               "fixed_slippage_c", SLIPPAGE_LEVELS_C)),
+                "venue_minimum_cap_usd": float(lane.get("paper_challengers", {}).get(
+                    "venue_minimum_cap_usd", VENUE_MINIMUM_CAP_USD)),
             }
         )
     if not lanes:
@@ -187,6 +219,26 @@ def requested_cash(trade: dict[str, Any], lane: dict[str, Any]) -> float:
     if lane["min_fill_floor"] and 0 < amount < lane["min_usd"]:
         amount = lane["min_usd"]
     return amount
+
+
+def venue_minimum_cash(
+    asks: list[dict[str, Any]], min_order_size: float, fee_rate: float, cap_usd: float
+) -> float | None:
+    """Return the cash needed for the exact share minimum, or fail closed above cap."""
+    if min_order_size <= 0:
+        return None
+    remaining = min_order_size
+    total = 0.0
+    for level in sorted(asks, key=lambda row: float(row["price"])):
+        price = float(level["price"])
+        take = min(remaining, float(level["size"]))
+        if price <= 0 or take <= 0:
+            continue
+        total += take * price + taker_fee(take, price, fee_rate)
+        remaining -= take
+        if remaining <= 1e-9:
+            return total if total <= cap_usd + 1e-9 else None
+    return None
 
 
 def append_event(path: Path, event: dict[str, Any]) -> None:
@@ -217,7 +269,7 @@ def load_state(path: Path) -> dict[str, Any] | None:
         return None
     with path.open(encoding="utf-8") as handle:
         state = json.load(handle)
-    if state.get("version") not in (1, 2) or not isinstance(state.get("seen"), list):
+    if state.get("version") not in (1, 2, 3) or not isinstance(state.get("seen"), list):
         raise ValueError("observer state is invalid")
     if state.get("version") == 2 and not isinstance(state.get("baselined_wallets"), list):
         raise ValueError("observer state is invalid")
@@ -230,11 +282,29 @@ def state_baselined_wallets(state: dict[str, Any] | None) -> set[str]:
     return set(state["baselined_wallets"])
 
 
-def activity_url(wallet: str, limit: int) -> str:
-    query = urlencode(
-        {"user": wallet, "type": "TRADE", "limit": limit, "sortDirection": "DESC"}
-    )
-    return f"{DATA_API}/activity?{query}"
+def state_feed_seen(state: dict[str, Any] | None) -> dict[str, set[str]]:
+    if not state or state.get("version") != 3:
+        return {feed: set() for feed in FEEDS}
+    value = state.get("feed_seen")
+    if not isinstance(value, dict) or any(not isinstance(value.get(feed), list) for feed in FEEDS):
+        raise ValueError("observer state is invalid")
+    return {feed: set(value[feed]) for feed in FEEDS}
+
+
+def state_baselined_feed_wallets(state: dict[str, Any] | None) -> set[str]:
+    if not state or state.get("version") != 3:
+        return set()
+    value = state.get("baselined_feed_wallets")
+    if not isinstance(value, list):
+        raise ValueError("observer state is invalid")
+    return set(value)
+
+
+def feed_url(feed: str, wallet: str, limit: int) -> str:
+    if feed not in FEEDS:
+        raise ValueError(f"unsupported feed: {feed}")
+    query = urlencode({"user": wallet, "limit": limit})
+    return f"{DATA_API}/v2/{feed}?{query}"
 
 
 def lane_accepts(trade: dict[str, Any], lane: dict[str, Any]) -> bool:
@@ -244,7 +314,7 @@ def lane_accepts(trade: dict[str, Any], lane: dict[str, Any]) -> bool:
 
 def quote_trade(
     trade: dict[str, Any], lane: dict[str, Any], clob_host: str, delay_ms: int,
-    detected_at_ms: int,
+    detected_at_ms: int, detected_source: str,
 ) -> dict[str, Any]:
     due_ms = detected_at_ms + delay_ms
     time.sleep(max(0.0, (due_ms - int(time.time() * 1000)) / 1000))
@@ -260,18 +330,44 @@ def quote_trade(
     side = str(trade.get("side") or "").upper()
     cash = requested_cash(trade, lane)
     leader_price = float(trade.get("price") or 0.0)
-    max_price = min(1.0, leader_price + lane["buy_slippage_c"] / 100.0)
-    quote = (
-        buy_quote(
-            book.get("asks") or [],
-            cash,
-            fee_rate,
-            min_order_size=float(market.get("mos") or 0.0),
-            max_price=max_price,
+    asks = book.get("asks") or []
+    minimum = float(market.get("mos") or 0.0)
+    quote = None
+    challengers = None
+    if side == "BUY":
+        quote = buy_quote(
+            asks, cash, fee_rate, min_order_size=minimum,
+            max_price=min(1.0, leader_price + lane["buy_slippage_c"] / 100.0),
         )
-        if side == "BUY"
-        else None
-    )
+        slippage_quotes = {
+            str(level): buy_quote(
+                asks, cash, fee_rate, min_order_size=minimum,
+                max_price=min(1.0, leader_price + level / 100.0),
+            )
+            for level in lane.get("slippage_levels_c", SLIPPAGE_LEVELS_C)
+        }
+        minimum_cap = lane.get("venue_minimum_cap_usd", VENUE_MINIMUM_CAP_USD)
+        minimum_cash = venue_minimum_cash(asks, minimum, fee_rate, minimum_cap)
+        minimum_quote = (
+            buy_quote(
+                asks, minimum_cash, fee_rate, min_order_size=minimum,
+                max_price=min(1.0, leader_price + lane["buy_slippage_c"] / 100.0),
+            )
+            if minimum_cash is not None else None
+        )
+        challengers = {
+            "same_book_snapshot": True,
+            "fixed_slippage_c": slippage_quotes,
+            "venue_minimum": {
+                "cap_usd": minimum_cap,
+                "original_requested_cash_usd": round(cash, 8),
+                "requested_cash_usd": round(minimum_cash, 8) if minimum_cash is not None else None,
+                "oversize_vs_control_usd": round(max(0.0, minimum_cash - cash), 8)
+                if minimum_cash is not None else None,
+                "quote": minimum_quote,
+                "eligible_under_cap": minimum_cash is not None,
+            },
+        }
     event_slug = str(trade.get("eventSlug") or "")
     event = fetch_json(f"{GAMMA_API}/events/slug/{event_slug}") if event_slug else {}
     market_categories = sorted(
@@ -293,10 +389,11 @@ def quote_trade(
         }
     )
     return {
-        "schema": "copybot.public-wallet-observation.v1",
+        "schema": "copybot.public-wallet-observation.v2",
         "kind": "follower_quote" if quote is not None else "unsupported_sell",
         "observed_at_ms": sampled_at_ms,
         "detected_at_ms": detected_at_ms,
+        "detected_source": detected_source,
         "leader_timestamp_s": int(trade["timestamp"]),
         "public_detection_lag_ms": max(0, detected_at_ms - int(trade["timestamp"]) * 1000),
         "configured_follower_delay_ms": delay_ms,
@@ -332,8 +429,9 @@ def quote_trade(
             "best_ask": min((float(x["price"]) for x in book.get("asks") or []), default=None),
         },
         "paper_quote": quote,
+        "paper_challengers": challengers,
         "limitations": [
-            "public activity visibility is later than the leader match",
+            "public feed visibility is later than the leader match",
             "book sampling is not an order or fill",
             "sell copying needs independently tracked follower inventory",
         ],
@@ -344,73 +442,97 @@ def run(args: argparse.Namespace) -> int:
     lanes = roster_specs(args.roster) if args.roster else lane_specs(args.config)
     state = load_state(args.state)
     seen = set(state["seen"] if state else [])
-    # V1 did not record which wallets it covered. Re-baseline every current
-    # lane rather than risk treating a newly added wallet as forward data.
-    baselined_wallets = state_baselined_wallets(state)
+    feed_seen = state_feed_seen(state)
+    feed_seen_order = {
+        feed: list(state["feed_seen"][feed])
+        if state and state.get("version") == 3 else []
+        for feed in FEEDS
+    }
+    # Older state did not distinguish feeds. Re-baseline each feed and wallet
+    # rather than misclassify migration history as forward observations.
+    baselined_feed_wallets = state_baselined_feed_wallets(state)
     polls = 0
     while args.max_polls == 0 or polls < args.max_polls:
         newly_seen: list[str] = []
-        new_trades: list[tuple[dict[str, Any], dict[str, Any], int]] = []
-        fetch_errors: list[tuple[dict[str, Any], Exception]] = []
+        new_trades: list[tuple[dict[str, Any], dict[str, Any], int, str]] = []
+        fetch_errors: list[tuple[dict[str, Any], str, Exception]] = []
         newly_baselined: list[str] = []
 
-        def fetch_lane(lane: dict[str, Any]) -> tuple[dict[str, Any], Any, int]:
+        def fetch_lane_feed(item: tuple[dict[str, Any], str]) -> tuple[dict[str, Any], str, Any, int]:
+            lane, feed = item
             try:
-                trades = fetch_json(activity_url(lane["wallet"], args.limit))
+                response = fetch_json(feed_url(feed, lane["wallet"], args.limit))
+                rows = response.get("data") if isinstance(response, dict) else None
+                if not isinstance(rows, list):
+                    raise ValueError("response data is not a list")
+                trades = [normalise_v2_trade(row) for row in rows]
             except Exception as error:
-                return lane, error, int(time.time() * 1000)
-            return lane, trades, int(time.time() * 1000)
+                return lane, feed, error, int(time.time() * 1000)
+            return lane, feed, trades, int(time.time() * 1000)
 
-        with ThreadPoolExecutor(max_workers=min(16, len(lanes))) as activity_pool:
-            fetched = list(activity_pool.map(fetch_lane, lanes))
-        for lane, trades, detected_at_ms in fetched:
+        inputs = [(lane, feed) for lane in lanes for feed in FEEDS]
+        with ThreadPoolExecutor(max_workers=min(32, len(inputs))) as activity_pool:
+            fetched = list(activity_pool.map(fetch_lane_feed, inputs))
+        for lane, feed, trades, detected_at_ms in fetched:
             if isinstance(trades, Exception):
-                fetch_errors.append((lane, trades))
+                fetch_errors.append((lane, feed, trades))
                 continue
-            if not isinstance(trades, list):
-                raise ValueError(f"activity response for {lane['name']} is not a list")
-            needs_baseline = lane["wallet"] not in baselined_wallets
+            baseline_key = f"{feed}:{lane['wallet']}"
+            needs_baseline = baseline_key not in baselined_feed_wallets
             for trade in reversed(trades):
                 key = trade_key(trade)
-                if key in seen:
+                if key in feed_seen[feed]:
                     continue
-                newly_seen.append(key)
-                if not needs_baseline and lane_accepts(trade, lane):
-                    new_trades.append((trade, lane, detected_at_ms))
+                feed_seen[feed].add(key)
+                feed_seen_order[feed].append(key)
+                if not needs_baseline:
+                    append_event(args.output, {
+                        "schema": "copybot.public-wallet-observation.v2",
+                        "kind": "feed_detection",
+                        "observed_at_ms": detected_at_ms,
+                        "lane": lane["name"],
+                        "trade_key": key,
+                        "feed": feed,
+                    })
+                    if key not in seen and key not in newly_seen and lane_accepts(trade, lane):
+                        newly_seen.append(key)
+                        new_trades.append((trade, lane, detected_at_ms, feed))
             if needs_baseline:
-                newly_baselined.append(lane["wallet"])
+                newly_baselined.append(baseline_key)
         baseline_errors = [
-            lane["name"] for lane, _ in fetch_errors if lane["wallet"] not in baselined_wallets
+            f"{lane['name']}:{feed}" for lane, feed, _ in fetch_errors
+            if f"{feed}:{lane['wallet']}" not in baselined_feed_wallets
         ]
         if baseline_errors:
             names = ", ".join(baseline_errors)
             raise RuntimeError(f"cannot establish complete no-backfill baseline: {names}")
         seen.update(newly_seen)
-        baselined_wallets.update(newly_baselined)
+        baselined_feed_wallets.update(newly_baselined)
         if newly_baselined:
             append_event(
                 args.output,
                 {
-                    "schema": "copybot.public-wallet-observation.v1",
+                    "schema": "copybot.public-wallet-observation.v2",
                     "kind": "baseline",
                     "observed_at_ms": int(time.time() * 1000),
-                    "wallets": sorted(newly_baselined),
+                    "feed_wallets": sorted(newly_baselined),
                     "existing_trades_suppressed": len(newly_seen),
                 },
             )
         else:
-            for lane, error in fetch_errors:
+            for lane, feed, error in fetch_errors:
                 append_event(
                     args.output,
                     {
-                        "schema": "copybot.public-wallet-observation.v1",
-                        "kind": "activity_error",
+                        "schema": "copybot.public-wallet-observation.v2",
+                        "kind": "feed_error",
                         "observed_at_ms": int(time.time() * 1000),
                         "lane": lane["name"],
+                        "feed": feed,
                         "error": f"{type(error).__name__}: {error}",
                     },
                 )
-            with ThreadPoolExecutor(max_workers=min(8, max(1, len(new_trades)))) as pool:
+            with ThreadPoolExecutor(max_workers=min(32, max(1, len(new_trades)))) as pool:
                 futures = [
                     (
                         trade,
@@ -422,9 +544,10 @@ def run(args: argparse.Namespace) -> int:
                             args.clob_host,
                             args.delay_ms,
                             detected_at_ms,
+                            detected_source,
                         ),
                     )
-                    for trade, lane, detected_at_ms in new_trades
+                    for trade, lane, detected_at_ms, detected_source in new_trades
                 ]
                 for trade, lane, future in futures:
                     try:
@@ -433,7 +556,7 @@ def run(args: argparse.Namespace) -> int:
                         append_event(
                             args.output,
                             {
-                                "schema": "copybot.public-wallet-observation.v1",
+                                "schema": "copybot.public-wallet-observation.v2",
                                 "kind": "quote_error",
                                 "observed_at_ms": int(time.time() * 1000),
                                 "lane": lane["name"],
@@ -445,10 +568,11 @@ def run(args: argparse.Namespace) -> int:
             dict.fromkeys(list(reversed(newly_seen)) + (state["seen"] if state else []))
         )
         state = {
-            "version": 2,
+            "version": 3,
             "updated_at_ms": int(time.time() * 1000),
             "seen": ordered[:5000],
-            "baselined_wallets": sorted(baselined_wallets),
+            "baselined_feed_wallets": sorted(baselined_feed_wallets),
+            "feed_seen": {feed: feed_seen_order[feed][-5000:] for feed in FEEDS},
         }
         save_state(args.state, state)
         polls += 1

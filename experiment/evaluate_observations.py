@@ -31,6 +31,11 @@ def summarise(events: list[dict[str, Any]]) -> dict[str, Any]:
         for category in categories:
             category_rows[str(category)].append(row)
 
+    feed_detections: dict[str, dict[str, int]] = defaultdict(dict)
+    for row in events:
+        if row.get("kind") == "feed_detection":
+            feed_detections[str(row["trade_key"])][str(row["feed"])] = int(row["observed_at_ms"])
+
     def group(rows: list[dict[str, Any]]) -> dict[str, Any]:
         executable = [row for row in rows if row.get("paper_quote", {}).get("executable")]
         slippage = [
@@ -56,6 +61,21 @@ def summarise(events: list[dict[str, Any]]) -> dict[str, Any]:
         }
 
     timestamps = [int(row["observed_at_ms"]) for row in events if row.get("observed_at_ms")]
+    challenger_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in quotes:
+        challengers = row.get("paper_challengers") or {}
+        for level, quote in (challengers.get("fixed_slippage_c") or {}).items():
+            if quote:
+                challenger_rows[f"slippage_{level}c"].append(dict(row, paper_quote=quote))
+        minimum = (challengers.get("venue_minimum") or {}).get("quote")
+        if minimum:
+            challenger_rows["venue_minimum_under_5usd"].append(dict(row, paper_quote=minimum))
+
+    paired_feed_lags = [
+        sources["activity"] - sources["trades"]
+        for sources in feed_detections.values()
+        if "activity" in sources and "trades" in sources
+    ]
     return {
         "schema": "copybot.wallet-observation-summary.v1",
         "event_count": len(events),
@@ -70,6 +90,14 @@ def summarise(events: list[dict[str, Any]]) -> dict[str, Any]:
             key: group(rows) for key, rows in sorted(category_rows.items())
         },
         "by_lane": {key: group(rows) for key, rows in sorted(lane_rows.items())},
+        "challengers": {key: group(rows) for key, rows in sorted(challenger_rows.items())},
+        "feed_detection": {
+            "first_seen": dict(sorted(Counter(
+                min(sources, key=sources.get) for sources in feed_detections.values() if sources
+            ).items())),
+            "paired_trade_count": len(paired_feed_lags),
+            "activity_minus_trades_ms": metric_summary(paired_feed_lags),
+        },
         "outcome_status": (
             "No realised or resolved outcome is inferred. "
             "Entry observations alone cannot prove profitability."

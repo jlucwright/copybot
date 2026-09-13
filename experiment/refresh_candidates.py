@@ -139,6 +139,7 @@ def refresh(protocol: dict[str, Any], captured_at_s: int) -> tuple[dict[str, Any
         "candidates": [candidates[wallet] for wallet in ordered_wallets],
     }
     sizing = protocol["paper_sizing"]
+    challengers = protocol["paper_challengers"]
     roster = {
         "schema": "copybot.wallet-observer-roster.v1",
         "generated_at": captured_at,
@@ -151,6 +152,7 @@ def refresh(protocol: dict[str, Any], captured_at_s: int) -> tuple[dict[str, Any
                     row["category"] for row in candidates[wallet]["leaderboards"]
                 ),
                 **sizing,
+                "paper_challengers": challengers,
             }
             for wallet in ordered_wallets
         ],
