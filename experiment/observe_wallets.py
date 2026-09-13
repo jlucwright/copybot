@@ -28,6 +28,7 @@ DATA_API = "https://data-api.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
 USER_AGENT = "copybot-paper-observer/2"
 FEEDS = ("trades", "activity")
+MAX_FEED_WORKERS = 64
 SLIPPAGE_LEVELS_C = (0.15, 0.5, 1.0)
 VENUE_MINIMUM_CAP_USD = 5.0
 
@@ -471,7 +472,7 @@ def run(args: argparse.Namespace) -> int:
             return lane, feed, trades, int(time.time() * 1000)
 
         inputs = [(lane, feed) for lane in lanes for feed in FEEDS]
-        with ThreadPoolExecutor(max_workers=min(32, len(inputs))) as activity_pool:
+        with ThreadPoolExecutor(max_workers=min(MAX_FEED_WORKERS, len(inputs))) as activity_pool:
             fetched = list(activity_pool.map(fetch_lane_feed, inputs))
         for lane, feed, trades, detected_at_ms in fetched:
             if isinstance(trades, Exception):

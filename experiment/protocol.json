@@ -1,5 +1,5 @@
 {
-  "schema": "copybot.wallet-candidate-protocol.v2",
+  "schema": "copybot.wallet-candidate-protocol.v3",
   "leaderboard_categories": [
     "CRYPTO",
     "SPORTS",
@@ -11,6 +11,12 @@
   "leaderboard_order": "PNL",
   "leaderboard_limit_per_category": 5,
   "activity_sample_limit": 100,
+  "observation_timing": {
+    "poll_seconds": 0.5,
+    "follower_delay_ms": 0,
+    "cohort": "fast-v1",
+    "started_with_no_backfill_baseline": true
+  },
   "paper_sizing": {
     "pct": 0.005,
     "max_usd_per_fill": 2.0,

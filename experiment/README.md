@@ -36,9 +36,9 @@ python3 experiment/refresh_candidates.py \
 ## Forward observer
 
 [`observe_wallets.py`](observe_wallets.py) polls the public v2 trades and
-activity feeds once per second. It maintains a separate no-backfill baseline
+activity feeds every 500 ms. It maintains a separate no-backfill baseline
 for each feed and wallet. For each BUY first visible on either feed after that
-baseline, it waits 250 ms from detection and samples the public CLOB book.
+baseline, it immediately samples the public CLOB book.
 Requests run concurrently so wallet position in the roster does not create a
 serial detection penalty.
 
@@ -109,7 +109,9 @@ Measured locally with `/usr/bin/time -l`:
 | Baseline 22 wallets | 0.38 s | 64 MB |
 | 12 polls at 5 s, including 59 signals | 82.23 s | 80 MB |
 
-The retained evidence was 101 KB for this run. The live observer now runs on a
+The retained evidence was 101 KB for this run. The `fast-v1` forward cohort
+uses separate state and observation files, so its zero-delay evidence is not
+pooled with the earlier 250 ms sample. The live observer now runs on a
 dedicated `t4g.micro` in AWS `eu-central-2` (Zurich), with 2 vCPU, 1 GiB RAM and
 an encrypted 8 GiB gp3 root volume. The instance is
 `i-04b7b5e56196ff512`. It is separate from the existing Zurich research host.
