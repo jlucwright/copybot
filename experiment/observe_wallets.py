@@ -10,6 +10,7 @@ have been fillable, including the market's own fee curve.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import math
@@ -298,26 +299,37 @@ def run(args: argparse.Namespace) -> int:
                         "error": f"{type(error).__name__}: {error}",
                     },
                 )
-            for trade, lane, detected_at_ms in new_trades:
-                try:
-                    append_event(
-                        args.output,
-                        quote_trade(
-                            trade, lane, args.clob_host, args.delay_ms, detected_at_ms
+            with ThreadPoolExecutor(max_workers=min(8, max(1, len(new_trades)))) as pool:
+                futures = [
+                    (
+                        trade,
+                        lane,
+                        pool.submit(
+                            quote_trade,
+                            trade,
+                            lane,
+                            args.clob_host,
+                            args.delay_ms,
+                            detected_at_ms,
                         ),
                     )
-                except Exception as error:
-                    append_event(
-                        args.output,
-                        {
-                            "schema": "copybot.public-wallet-observation.v1",
-                            "kind": "quote_error",
-                            "observed_at_ms": int(time.time() * 1000),
-                            "lane": lane["name"],
-                            "trade_key": trade_key(trade),
-                            "error": f"{type(error).__name__}: {error}",
-                        },
-                    )
+                    for trade, lane, detected_at_ms in new_trades
+                ]
+                for trade, lane, future in futures:
+                    try:
+                        append_event(args.output, future.result())
+                    except Exception as error:
+                        append_event(
+                            args.output,
+                            {
+                                "schema": "copybot.public-wallet-observation.v1",
+                                "kind": "quote_error",
+                                "observed_at_ms": int(time.time() * 1000),
+                                "lane": lane["name"],
+                                "trade_key": trade_key(trade),
+                                "error": f"{type(error).__name__}: {error}",
+                            },
+                        )
         ordered = list(
             dict.fromkeys(list(reversed(newly_seen)) + (state["seen"] if state else []))
         )
