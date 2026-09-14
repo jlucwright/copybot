@@ -59,7 +59,8 @@ class SummaryHandlerTests(unittest.TestCase):
             }) + "\n", encoding="utf-8")
             mempool.write_text("\n".join((
                 json.dumps({"kind": "mempool_detection", "observed_at_ms": 1200,
-                            "source": "publicnode", "transaction_hash": "0xabc"}),
+                            "source": "publicnode", "transaction_hash": "0xabc",
+                            "order_size": 10, "fill_size": 2}),
                 json.dumps({"kind": "mempool_quote", "observed_at_ms": 1250,
                             "detected_at_ms": 1200, "actual_sample_delay_ms": 50,
                             "source": "publicnode", "transaction_hash": "0xabc",
@@ -76,6 +77,8 @@ class SummaryHandlerTests(unittest.TestCase):
             self.assertEqual(result["mempool"]["book_samples"]["executable_quotes"], 1)
             self.assertEqual(result["mempool"]["book_samples"]["sample_delay_ms"]["median"], 50)
             self.assertEqual(result["mempool"]["uncapped_book_samples"]["executable_quotes"], 1)
+            self.assertEqual(result["mempool"]["leader_order_size"]["partial_fills"], 1)
+            self.assertEqual(result["mempool"]["leader_order_size"]["partial_fill_rate"], 1.0)
 
 
 if __name__ == "__main__":

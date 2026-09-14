@@ -79,6 +79,8 @@ class IncrementalSummary:
         self.public_detected_by_hash: dict[str, int] = {}
         self.joined_hashes: set[str] = set()
         self.mempool_leads: list[float] = []
+        self.leader_sized_fills = 0
+        self.leader_partial_fills = 0
 
     def _join_hash(self, transaction_hash: str) -> None:
         if not transaction_hash or transaction_hash in self.joined_hashes:
@@ -127,6 +129,17 @@ class IncrementalSummary:
         self.mempool_sources.add(str(row.get("source")))
         if kind == "mempool_detection":
             self.mempool_count += 1
+            order_size = row.get("order_size")
+            fill_size = row.get("fill_size")
+            try:
+                order_value = float(order_size)
+                fill_value = float(fill_size)
+            except (TypeError, ValueError):
+                order_value = fill_value = 0.0
+            if order_value > 0 and fill_value > 0:
+                self.leader_sized_fills += 1
+                if fill_value + 1e-9 < order_value:
+                    self.leader_partial_fills += 1
             transaction_hash = str(row.get("transaction_hash") or "").lower()
             if transaction_hash and row.get("observed_at_ms") is not None:
                 observed = int(row["observed_at_ms"])
@@ -180,6 +193,14 @@ class IncrementalSummary:
                 "book_sample_errors": self.mempool_quote_errors,
                 "public_feed_hash_matches": len(self.joined_hashes),
                 "lead_vs_public_detection_ms": metric(self.mempool_leads),
+                "leader_order_size": {
+                    "sized_detections": self.leader_sized_fills,
+                    "partial_fills": self.leader_partial_fills,
+                    "partial_fill_rate": (
+                        round(self.leader_partial_fills / self.leader_sized_fills, 6)
+                        if self.leader_sized_fills else None
+                    ),
+                },
                 "order_capability": False,
             },
             "order_capability": False,
