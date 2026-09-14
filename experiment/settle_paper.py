@@ -99,7 +99,10 @@ def run(args: argparse.Namespace) -> int:
     settled = set(state.get("settled") or [])
     markets = state.get("markets") or {}
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    existing = {json.loads(line).get("key") for line in args.output.open(encoding="utf-8")}
+    existing = set()
+    if args.output.exists():
+        with args.output.open(encoding="utf-8") as handle:
+            existing = {json.loads(line).get("key") for line in handle}
     settled.update(existing - {None})
     added = 0
     for source, path in (("main", args.observations), ("mempool", args.mempool)):

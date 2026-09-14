@@ -214,7 +214,9 @@ class IncrementalSummary:
                 "order_capability": False,
             },
             "order_capability": False,
-            "profitability_status": "unknown_no_settled_outcomes",
+            "profitability_status": (
+                "settled_paper_pnl_available" if self.settlements else "unknown_no_settled_outcomes"
+            ),
             "paper_pnl": {
                 key: {"settled": value["settled"], "pnl_usd": round(float(value["pnl_usd"]), 8),
                       "cost_usd": round(float(value["cost_usd"]), 8)}
