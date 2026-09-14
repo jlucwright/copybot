@@ -1,0 +1,23 @@
+[Unit]
+Description=Credential-free Polymarket paper settlement watcher
+After=network-online.target copybot-wallet-paper.service copybot-wallet-mempool.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=copybot-paper
+Group=copybot-paper
+WorkingDirectory=/opt/copybot-paper
+ExecStart=/usr/bin/python3 /opt/copybot-paper/settle_paper.py --observations /var/lib/copybot-paper/observations-fast-v1.jsonl --mempool /var/lib/copybot-paper/mempool-observations.jsonl --output /var/lib/copybot-paper/settlements.jsonl --state /var/lib/copybot-paper/settlement-state.json --interval-seconds 60
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/copybot-paper
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

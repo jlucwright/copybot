@@ -81,6 +81,9 @@ class IncrementalSummary:
         self.mempool_leads: list[float] = []
         self.leader_sized_fills = 0
         self.leader_partial_fills = 0
+        self.settlements: dict[str, dict[str, float | int]] = defaultdict(
+            lambda: {"settled": 0, "pnl_usd": 0.0, "cost_usd": 0.0}
+        )
 
     def _join_hash(self, transaction_hash: str) -> None:
         if not transaction_hash or transaction_hash in self.joined_hashes:
@@ -161,6 +164,13 @@ class IncrementalSummary:
         elif kind == "mempool_quote_error":
             self.mempool_quote_errors += 1
 
+    def add_settlement(self, row: dict[str, object]) -> None:
+        variant = str(row.get("variant") or "unknown")
+        value = self.settlements[variant]
+        value["settled"] = int(value["settled"]) + 1
+        value["pnl_usd"] = float(value["pnl_usd"]) + float(row.get("pnl_usd") or 0)
+        value["cost_usd"] = float(value["cost_usd"]) + float(row.get("cost_usd") or 0)
+
     def value(self, now_ms: int) -> dict[str, object]:
         paired = [
             sources["activity"] - sources["trades"]
@@ -205,12 +215,19 @@ class IncrementalSummary:
             },
             "order_capability": False,
             "profitability_status": "unknown_no_settled_outcomes",
+            "paper_pnl": {
+                key: {"settled": value["settled"], "pnl_usd": round(float(value["pnl_usd"]), 8),
+                      "cost_usd": round(float(value["cost_usd"]), 8)}
+                for key, value in sorted(self.settlements.items())
+            },
         }
 
 
 class SummaryCache:
-    def __init__(self, observations: Path, mempool_observations: Path | None) -> None:
-        self.paths = ((observations, "main"), (mempool_observations, "mempool"))
+    def __init__(self, observations: Path, mempool_observations: Path | None,
+                 settlements: Path | None = None) -> None:
+        self.paths = ((observations, "main"), (mempool_observations, "mempool"),
+                      (settlements, "settlement"))
         self.offsets: dict[Path, int] = {}
         self.summary = IncrementalSummary()
         self.lock = Lock()
@@ -234,8 +251,10 @@ class SummaryCache:
                 row = json.loads(line)
                 if kind == "main":
                     self.summary.add_main(row)
-                else:
+                elif kind == "mempool":
                     self.summary.add_mempool(row)
+                else:
+                    self.summary.add_settlement(row)
             self.offsets[source] = handle.tell()
 
     def value(self, now_ms: int) -> dict[str, object]:
@@ -314,10 +333,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8091)
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--mempool-observations", type=Path)
+    parser.add_argument("--settlements", type=Path)
     args = parser.parse_args()
     Handler.observations = args.observations
     Handler.mempool_observations = args.mempool_observations
-    Handler.cache = SummaryCache(args.observations, args.mempool_observations)
+    Handler.cache = SummaryCache(args.observations, args.mempool_observations, args.settlements)
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
