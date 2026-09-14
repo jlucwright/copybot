@@ -1,6 +1,9 @@
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
-from serve_summary import build_summary
+from serve_summary import build_summary, SummaryCache
 
 
 class SummaryHandlerTests(unittest.TestCase):
@@ -19,6 +22,29 @@ class SummaryHandlerTests(unittest.TestCase):
         self.assertEqual(result["mempool"]["detection_count"], 1)
         self.assertEqual(result["mempool"]["last_observed_at_ms"], 1500)
         self.assertFalse(result["mempool"]["order_capability"])
+
+    def test_incremental_cache_reads_only_appended_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            observations = Path(directory) / "observations.jsonl"
+            mempool = Path(directory) / "mempool.jsonl"
+            observations.write_text(
+                json.dumps({"kind": "baseline", "observed_at_ms": 1000}) + "\n",
+                encoding="utf-8",
+            )
+            mempool.write_text(
+                json.dumps({"kind": "mempool_detection", "observed_at_ms": 1100, "source": "one"}) + "\n",
+                encoding="utf-8",
+            )
+            cache = SummaryCache(observations, mempool)
+            first = cache.value(1200)
+            self.assertEqual(first["event_count"], 1)
+            self.assertEqual(first["mempool"]["detection_count"], 1)
+            with mempool.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"kind": "mempool_detection", "observed_at_ms": 1300, "source": "two"}) + "\n")
+            second = cache.value(1400)
+            self.assertEqual(second["event_count"], 1)
+            self.assertEqual(second["mempool"]["detection_count"], 2)
+            self.assertEqual(second["mempool"]["sources"], ["one", "two"])
 
 
 if __name__ == "__main__":
