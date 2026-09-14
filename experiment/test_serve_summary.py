@@ -65,13 +65,17 @@ class SummaryHandlerTests(unittest.TestCase):
                             "source": "publicnode", "transaction_hash": "0xabc",
                             "leader_price": 0.50, "paper_quote": {"filled": True,
                             "meets_min_order_size": True, "executable": True,
-                            "fee_usd": 0, "vwap": 0.50}}),
+                            "fee_usd": 0, "vwap": 0.50},
+                            "paper_challengers": {"uncapped": {"filled": True,
+                            "meets_min_order_size": True, "executable": True,
+                            "fee_usd": 0, "vwap": 0.51}}}),
             )) + "\n", encoding="utf-8")
             result = SummaryCache(observations, mempool).value(3000)
             self.assertEqual(result["mempool"]["public_feed_hash_matches"], 1)
             self.assertEqual(result["mempool"]["lead_vs_public_detection_ms"]["median"], 800)
             self.assertEqual(result["mempool"]["book_samples"]["executable_quotes"], 1)
             self.assertEqual(result["mempool"]["book_samples"]["sample_delay_ms"]["median"], 50)
+            self.assertEqual(result["mempool"]["uncapped_book_samples"]["executable_quotes"], 1)
 
 
 if __name__ == "__main__":

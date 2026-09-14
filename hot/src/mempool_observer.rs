@@ -200,6 +200,10 @@ async fn sample_book(client: reqwest::Client, output: PathBuf, detection: Value,
     let mut cash = lane.max_usd.min(leader_cash * lane.pct);
     if lane.min_fill_floor && cash > 0.0 && cash < lane.min_usd { cash = lane.min_usd; }
     let quote = paper_quote(book["asks"].as_array().map(Vec::as_slice).unwrap_or(&[]), cash, fee_rate, minimum, (price + lane.buy_slippage_c / 100.0).min(1.0));
+    let uncapped_quote = paper_quote(
+        book["asks"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+        cash, fee_rate, minimum, 1.0,
+    );
     let _ = append(&output, &json!({
         "schema":"copybot.mempool-observation.v2", "kind":"mempool_quote",
         "observed_at_ms":sampled_at_ms, "detected_at_ms":detected_at_ms,
@@ -211,7 +215,8 @@ async fn sample_book(client: reqwest::Client, output: PathBuf, detection: Value,
         "book":{"timestamp":book["timestamp"], "hash":book["hash"],
             "best_bid":book["bids"].as_array().and_then(|v| v.iter().filter_map(|r| number(&r["price"])).max_by(f64::total_cmp)),
             "best_ask":book["asks"].as_array().and_then(|v| v.iter().filter_map(|r| number(&r["price"])).min_by(f64::total_cmp))},
-        "paper_quote":quote, "order_capability":false,
+        "paper_quote":quote, "paper_challengers":{"uncapped":uncapped_quote},
+        "order_capability":false,
         "limitations":["book sampling is not an order or fill", "pending transactions can be replaced or dropped"]
     }));
 }

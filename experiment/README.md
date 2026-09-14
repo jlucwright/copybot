@@ -54,6 +54,9 @@ is written before an asynchronous public CLOB book request starts. The resulting
 executability using the frozen lane sizing and price cap. Transaction hashes
 join these observations to later public-feed quotes in the summary. This is a
 causally earlier sampled-book lane, not an order, fill or profitability claim.
+The same snapshot also records an uncapped challenger that walks all displayed
+asks. Its VWAP and slippage remain explicit, and it does not replace or alter
+the frozen 0.15-cent control.
 
 Each paper quote:
 
