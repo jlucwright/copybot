@@ -175,6 +175,23 @@ fn paper_quote(asks: &[Value], cash: f64, fee_rate: f64, min_shares: f64, max_pr
     })
 }
 
+fn minimum_cash(asks: &[Value], fee_rate: f64, min_shares: f64, cap: f64) -> Option<f64> {
+    if min_shares <= 0.0 { return None; }
+    let mut levels: Vec<(f64, f64)> = asks.iter().filter_map(|row| {
+        Some((number(&row["price"])?, number(&row["size"])?))
+    }).collect();
+    levels.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (mut remaining, mut total) = (min_shares, 0.0);
+    for (price, available) in levels {
+        let take = remaining.min(available);
+        if price <= 0.0 || take <= 0.0 { continue; }
+        total += take * price + take * fee_rate * price * (1.0 - price);
+        remaining -= take;
+        if remaining <= 1e-9 { return (total <= cap + 1e-9).then_some(total); }
+    }
+    None
+}
+
 async fn sample_book(client: reqwest::Client, output: PathBuf, detection: Value, lane: Lane) {
     if detection["side"] != "BUY" { return; }
     let detected_at_ms = detection["observed_at_ms"].as_u64().unwrap_or(0);
@@ -204,6 +221,12 @@ async fn sample_book(client: reqwest::Client, output: PathBuf, detection: Value,
         book["asks"].as_array().map(Vec::as_slice).unwrap_or(&[]),
         cash, fee_rate, minimum, 1.0,
     );
+    let uncapped_minimum_quote = minimum_cash(
+        book["asks"].as_array().map(Vec::as_slice).unwrap_or(&[]), fee_rate, minimum, 5.0
+    ).map(|minimum_cash| paper_quote(
+        book["asks"].as_array().map(Vec::as_slice).unwrap_or(&[]),
+        minimum_cash, fee_rate, minimum, 1.0,
+    ));
     let _ = append(&output, &json!({
         "schema":"copybot.mempool-observation.v2", "kind":"mempool_quote",
         "observed_at_ms":sampled_at_ms, "detected_at_ms":detected_at_ms,
@@ -215,7 +238,8 @@ async fn sample_book(client: reqwest::Client, output: PathBuf, detection: Value,
         "book":{"timestamp":book["timestamp"], "hash":book["hash"],
             "best_bid":book["bids"].as_array().and_then(|v| v.iter().filter_map(|r| number(&r["price"])).max_by(f64::total_cmp)),
             "best_ask":book["asks"].as_array().and_then(|v| v.iter().filter_map(|r| number(&r["price"])).min_by(f64::total_cmp))},
-        "paper_quote":quote, "paper_challengers":{"uncapped":uncapped_quote},
+        "paper_quote":quote, "paper_challengers":{"uncapped":uncapped_quote,
+            "uncapped_minimum":uncapped_minimum_quote},
         "order_capability":false,
         "limitations":["book sampling is not an order or fill", "pending transactions can be replaced or dropped"]
     }));

@@ -56,7 +56,9 @@ join these observations to later public-feed quotes in the summary. This is a
 causally earlier sampled-book lane, not an order, fill or profitability claim.
 The same snapshot also records an uncapped challenger that walks all displayed
 asks. Its VWAP and slippage remain explicit, and it does not replace or alter
-the frozen 0.15-cent control.
+the frozen 0.15-cent control. A second uncapped-minimum challenger requests the
+cash needed for the market minimum, only when that cost is at most $5. This
+separates a price-limit problem from a small-size problem.
 
 Each paper quote:
 

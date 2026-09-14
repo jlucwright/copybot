@@ -73,6 +73,7 @@ class IncrementalSummary:
         self.mempool_sources: set[str] = set()
         self.mempool_quotes = QuoteGroup()
         self.mempool_uncapped_quotes = QuoteGroup()
+        self.mempool_uncapped_minimum_quotes = QuoteGroup()
         self.mempool_quote_errors = 0
         self.mempool_detected_by_hash: dict[str, int] = {}
         self.public_detected_by_hash: dict[str, int] = {}
@@ -141,6 +142,9 @@ class IncrementalSummary:
             uncapped = (row.get("paper_challengers") or {}).get("uncapped")
             if uncapped:
                 self.mempool_uncapped_quotes.add(adapted, uncapped)
+            uncapped_minimum = (row.get("paper_challengers") or {}).get("uncapped_minimum")
+            if uncapped_minimum:
+                self.mempool_uncapped_minimum_quotes.add(adapted, uncapped_minimum)
         elif kind == "mempool_quote_error":
             self.mempool_quote_errors += 1
 
@@ -172,6 +176,7 @@ class IncrementalSummary:
                 "sources": sorted(self.mempool_sources),
                 "book_samples": self.mempool_quotes.value(),
                 "uncapped_book_samples": self.mempool_uncapped_quotes.value(),
+                "uncapped_minimum_book_samples": self.mempool_uncapped_minimum_quotes.value(),
                 "book_sample_errors": self.mempool_quote_errors,
                 "public_feed_hash_matches": len(self.joined_hashes),
                 "lead_vs_public_detection_ms": metric(self.mempool_leads),
