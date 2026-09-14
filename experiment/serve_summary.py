@@ -71,6 +71,22 @@ class IncrementalSummary:
         self.mempool_count = 0
         self.mempool_last_ms: int | None = None
         self.mempool_sources: set[str] = set()
+        self.mempool_quotes = QuoteGroup()
+        self.mempool_quote_errors = 0
+        self.mempool_detected_by_hash: dict[str, int] = {}
+        self.public_detected_by_hash: dict[str, int] = {}
+        self.joined_hashes: set[str] = set()
+        self.mempool_leads: list[float] = []
+
+    def _join_hash(self, transaction_hash: str) -> None:
+        if not transaction_hash or transaction_hash in self.joined_hashes:
+            return
+        mempool_ms = self.mempool_detected_by_hash.get(transaction_hash)
+        public_ms = self.public_detected_by_hash.get(transaction_hash)
+        if mempool_ms is None or public_ms is None:
+            return
+        self.joined_hashes.add(transaction_hash)
+        self.mempool_leads.append(float(public_ms - mempool_ms))
 
     def add_main(self, row: dict[str, object]) -> None:
         kind = str(row.get("kind"))
@@ -83,6 +99,14 @@ class IncrementalSummary:
             self.feed_sources[str(row["trade_key"])][str(row["feed"])] = int(row["observed_at_ms"])
         if kind != "follower_quote":
             return
+        trade = row.get("trade") or {}
+        transaction_hash = str(trade.get("transactionHash") or "").lower()
+        detected_at_ms = int(row.get("detected_at_ms") or 0)
+        if transaction_hash and detected_at_ms:
+            self.public_detected_by_hash[transaction_hash] = min(
+                self.public_detected_by_hash.get(transaction_hash, detected_at_ms), detected_at_ms
+            )
+            self._join_hash(transaction_hash)
         quote = row.get("paper_quote") or {}
         self.control.add(row, quote)
         challengers = row.get("paper_challengers") or {}
@@ -94,11 +118,27 @@ class IncrementalSummary:
             self.challengers["venue_minimum_under_5usd"].add(row, minimum)
 
     def add_mempool(self, row: dict[str, object]) -> None:
-        self.mempool_count += 1
+        kind = str(row.get("kind"))
         if row.get("observed_at_ms") is not None:
             observed = int(row["observed_at_ms"])
             self.mempool_last_ms = max(self.mempool_last_ms or observed, observed)
         self.mempool_sources.add(str(row.get("source")))
+        if kind == "mempool_detection":
+            self.mempool_count += 1
+            transaction_hash = str(row.get("transaction_hash") or "").lower()
+            if transaction_hash and row.get("observed_at_ms") is not None:
+                observed = int(row["observed_at_ms"])
+                self.mempool_detected_by_hash[transaction_hash] = min(
+                    self.mempool_detected_by_hash.get(transaction_hash, observed), observed
+                )
+                self._join_hash(transaction_hash)
+        elif kind == "mempool_quote":
+            adapted = dict(row)
+            adapted["public_detection_lag_ms"] = 0
+            adapted["trade"] = {"price": row.get("leader_price") or 0}
+            self.mempool_quotes.add(adapted, row.get("paper_quote") or {})
+        elif kind == "mempool_quote_error":
+            self.mempool_quote_errors += 1
 
     def value(self, now_ms: int) -> dict[str, object]:
         paired = [
@@ -126,6 +166,10 @@ class IncrementalSummary:
                 "detection_count": self.mempool_count,
                 "last_observed_at_ms": self.mempool_last_ms,
                 "sources": sorted(self.mempool_sources),
+                "book_samples": self.mempool_quotes.value(),
+                "book_sample_errors": self.mempool_quote_errors,
+                "public_feed_hash_matches": len(self.joined_hashes),
+                "lead_vs_public_detection_ms": metric(self.mempool_leads),
                 "order_capability": False,
             },
             "order_capability": False,

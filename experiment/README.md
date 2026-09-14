@@ -48,8 +48,12 @@ serial detection penalty.
 WebSocket and decodes watched-wallet matches into a separate append-only file.
 It imports feed and calldata modules only: there is no signer, custody, CLOB
 authentication or order path. The retained service uses one PublicNode socket
-and writes `/var/lib/copybot-paper/mempool-observations.jsonl`. This is a
-detection lane, not fill or profitability evidence.
+and writes `/var/lib/copybot-paper/mempool-observations.jsonl`. Each decoded BUY
+is written before an asynchronous public CLOB book request starts. The resulting
+`mempool_quote` records the displayed book, request delay and paper
+executability using the frozen lane sizing and price cap. Transaction hashes
+join these observations to later public-feed quotes in the summary. This is a
+causally earlier sampled-book lane, not an order, fill or profitability claim.
 
 Each paper quote:
 
