@@ -42,7 +42,7 @@ def payout(condition: str, token: str, market_cache: dict[str, dict]) -> float |
     market = market_cache.get(condition)
     if market is None:
         try:
-            market = get_json(f"{CLOB}/markets/0x{raw}")
+            market = get_json(f"{CLOB}/clob-markets/0x{raw}")
         except Exception:
             return None
         market_cache[condition] = market
